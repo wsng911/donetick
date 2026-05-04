@@ -1,45 +1,32 @@
-# Stage 1: Build the application
-FROM alpine:latest AS builder
+FROM golang:1.23-alpine AS builder
 
-WORKDIR /usr/src/app
+WORKDIR /app
 
-RUN apk --no-cache add curl jq
+RUN apk add --no-cache git && \
+    git config --global user.email "dev@example.com" && \
+    git config --global user.name "dev"
 
-# Accept VERSION as build argument, fallback to latest stable release if not provided
-ARG VERSION
-RUN if [ -z "$VERSION" ]; then \
-        VERSION=$(curl --silent "https://api.github.com/repos/donetick/donetick/releases/latest" | jq -r .tag_name); \
-    fi && \
-    echo "Downloading version: $VERSION" && \
-    set -ex; \
-    apkArch="$(apk --print-arch)"; \
-    case "$apkArch" in \
-    armhf) arch='armv6' ;; \
-    armv7) arch='armv7' ;; \
-    aarch64) arch='arm64' ;; \
-    x86_64) arch='x86_64' ;; \
-    *) echo >&2 "error: unsupported architecture: $apkArch"; exit 1 ;; \
-    esac; \
-    curl -fL "https://github.com/donetick/donetick/releases/download/${VERSION}/donetick_Linux_$arch.tar.gz" | tar -xz -C .
+COPY go.mod go.sum ./
+RUN go mod download
 
-# Stage 2: Create a smaller runtime image
+COPY . .
+
+RUN git init && git add -A && git commit -m "init" || true
+
+RUN CGO_ENABLED=0 GOOS=linux go build -o donetick ./main.go
+
 FROM alpine:latest
 
-# Install necessary CA certificates
-RUN apk --no-cache add ca-certificates libc6-compat
+WORKDIR /app
 
-# Install timezone package
-RUN apk --no-cache add tzdata
+RUN apk add --no-cache tzdata
 
-# Copy the binary and config folder from the builder stage
-COPY --from=builder /usr/src/app/donetick /donetick
-COPY --from=builder /usr/src/app/config /config
+COPY --from=builder /app/donetick ./donetick
 
-# Set environment variables
-ENV DT_ENV="selfhosted"
+RUN mkdir -p /app/data
 
-# Expose the application port
+ENV DONETICK_ENV=production
+
 EXPOSE 2021
 
-# Command to run the application
-CMD ["/donetick"]
+CMD ["./donetick"]
